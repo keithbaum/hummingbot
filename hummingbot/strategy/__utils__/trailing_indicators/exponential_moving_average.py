@@ -1,4 +1,4 @@
-from base_trailing_indicator import BaseTrailingIndicator
+from .base_trailing_indicator import BaseTrailingIndicator
 import pandas as pd
 
 
@@ -11,7 +11,7 @@ class ExponentialMovingAverageIndicator(BaseTrailingIndicator):
     def _indicator_calculation(self) -> float:
         ema = pd.Series(self._sampling_buffer.get_as_numpy_array())\
             .ewm(span=self._sampling_length, adjust=True).mean()
-        return ema[-1]
+        return ema.values[-1]
 
     def _processing_calculation(self) -> float:
         return self._processing_buffer.get_last_value()

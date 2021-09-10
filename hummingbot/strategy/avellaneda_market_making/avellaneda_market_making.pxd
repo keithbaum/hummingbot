@@ -55,6 +55,8 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         object _latest_parameter_calculation_vol
         str _debug_csv_path
         object _avg_vol
+        object _slow_ema
+        object _fast_ema
 
     cdef object c_get_mid_price(self)
     cdef _create_proposal_based_on_order_override(self)

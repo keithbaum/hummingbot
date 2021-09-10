@@ -6,6 +6,7 @@ from typing import (
     List,
     Dict,
     Tuple,
+    Optional
 )
 from math import (
     floor,
@@ -27,6 +28,7 @@ from hummingbot.core.network_iterator import NetworkStatus
 from hummingbot.core.event.events import OrderType
 
 from hummingbot.strategy.__utils__.trailing_indicators.instant_volatility import InstantVolatilityIndicator
+from hummingbot.strategy.__utils__.trailing_indicators.exponential_moving_average import ExponentialMovingAverageIndicator
 from hummingbot.strategy.data_types import (
     Proposal,
     PriceSize)
@@ -38,6 +40,8 @@ from hummingbot.strategy.order_tracker cimport OrderTracker
 from hummingbot.strategy.strategy_base import StrategyBase
 from hummingbot.strategy.utils import order_age
 from hummingbot.core.utils import map_df_to_str
+
+from hummingbot.strategy.avellaneda_market_making.trend_type import TrendType
 
 
 NaN = float("nan")
@@ -131,6 +135,8 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         self._volatility_sensibility = volatility_sensibility
         self._inventory_risk_aversion = inventory_risk_aversion
         self._avg_vol = InstantVolatilityIndicator(volatility_buffer_size, 1)
+        self._slow_ema = ExponentialMovingAverageIndicator(21)
+        self._fast_ema = ExponentialMovingAverageIndicator(3)
         self._last_sampling_timestamp = 0
         self._kappa = order_book_depth_factor
         self._gamma = risk_factor
@@ -527,6 +533,10 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
                           f"    volatility= {volatility_pct:.3f}%",
                           f"    time until end of trading cycle= {str(datetime.timedelta(seconds=float(self._time_left)//1e3))}"])
 
+        trend_name = self.get_trend().name if self.get_trend() else "-"
+        lines.extend([f"Slow EMA={self._slow_ema.current_value}   Fast EMA={self._fast_ema.current_value}",
+                      f"Current Trend: {trend_name}"])
+
         warning_lines.extend(self.balance_warning([self._market_info]))
 
         if len(warning_lines) > 0:
@@ -630,6 +640,8 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         self._time_left = max(self._time_left - Decimal(timestamp - self._last_timestamp) * 1000, 0)
         price = self.get_price()
         self._avg_vol.add_sample(price)
+        self._slow_ema.add_sample(price)
+        self._fast_ema.add_sample(price)
         # Calculate adjustment factor to have 0.01% of inventory resolution
         base_balance = market.get_balance(base_asset)
         quote_balance = market.get_balance(quote_asset)
@@ -731,8 +743,24 @@ cdef class AvellanedaMarketMakingStrategy(StrategyBase):
         quote_asset_amount = market.get_balance(quote_asset)
         base_value = base_asset_amount * price
         inventory_value = base_value + quote_asset_amount
-        target_inventory_value = inventory_value * self._inventory_target_base_pct
+        actual_inventory_target_pct = self.calculate_inv_target_pct(self.get_trend())
+        target_inventory_value = inventory_value * actual_inventory_target_pct
         return market.c_quantize_order_amount(trading_pair, Decimal(str(target_inventory_value / price)))
+
+    def get_trend(self):
+        if not all([self._slow_ema.is_sampling_buffer_full, self._fast_ema.is_sampling_buffer_full]):
+            return
+        if self._fast_ema.current_value >= self._slow_ema.current_value:
+            return TrendType.UPWARDS
+        else:
+            return TrendType.DOWNWARDS
+
+    def calculate_inv_target_pct(self, trend: Optional[TrendType]):
+        definition = {
+            TrendType.UPWARDS: Decimal("0.8"),
+            TrendType.DOWNWARDS: Decimal("0.2")
+        }
+        return definition.get(trend, self._inventory_target_base_pct)
 
     def calculate_target_inventory(self) -> Decimal:
         return self.c_calculate_target_inventory()
