@@ -1,0 +1,11 @@
+/conf
+/logs
+/dist
+/db
+/.idea
+package-lock.json
+/certs
+/node_modules
+/coverage
+**/.DS_Store
+**/gateway_files
