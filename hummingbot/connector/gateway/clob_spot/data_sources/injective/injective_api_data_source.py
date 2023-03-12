@@ -120,15 +120,7 @@ class InjectiveAPIDataSource(GatewayCLOBAPIDataSourceBase):
         self._network = network
         self._sub_account_id = address
         self._account_address: Optional[str] = None
-        self._network_obj = Network.custom(
-            lcd_endpoint="https://k8s.global.mainnet.lcd.injective.network:443",
-            tm_websocket_endpoint="wss://k8s.global.mainnet.tm.injective.network:443/websocket",
-            grpc_endpoint="k8s.global.mainnet.chain.grpc.injective.network:443",
-            grpc_exchange_endpoint="k8s.global.mainnet.exchange.grpc.injective.network:443",
-            grpc_explorer_endpoint="k8s.mainnet.explorer.grpc.injective.network:443",
-            chain_id="injective-1",
-            env="mainnet"
-        )
+        self._network_obj = getattr(Network, self._network)()
         self._client = AsyncClient(network=self._network_obj)
         self._composer = ProtoMsgComposer(network=self._network_obj.string())
         self._order_hash_manager: Optional[OrderHashManager] = None
