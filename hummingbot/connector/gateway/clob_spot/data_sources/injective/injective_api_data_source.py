@@ -392,7 +392,7 @@ class InjectiveAPIDataSource(GatewayCLOBAPIDataSourceBase):
             order_hash=order_hash,
             market_id=market.market_id,
             direction=direction,
-            creation_timestamp=in_flight_order.creation_timestamp,
+            creation_timestamp=in_flight_order.creation_timestamp * 1e3,
             order_type=in_flight_order.order_type,
             trade_type=in_flight_order.trade_type,
             order_mist_updates=misc_updates,
