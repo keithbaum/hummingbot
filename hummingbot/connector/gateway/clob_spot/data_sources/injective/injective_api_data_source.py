@@ -24,6 +24,7 @@ from pyinjective.proto.exchange.injective_spot_exchange_rpc_pb2 import (
     TokenMeta,
 )
 from pyinjective.proto.injective.exchange.v1beta1.exchange_pb2 import DerivativeOrder, SpotOrder
+from pyinjective.wallet import Address
 
 from hummingbot.client.config.config_helpers import ClientConfigAdapter
 from hummingbot.connector.gateway.clob_spot.data_sources.gateway_clob_api_data_source_base import (
@@ -119,7 +120,7 @@ class InjectiveAPIDataSource(GatewayCLOBAPIDataSourceBase):
         self._chain = chain
         self._network = network
         self._sub_account_id = address
-        self._account_address: Optional[str] = None
+        self._account_address: str = Address(bytes.fromhex(address[2:-24])).to_acc_bech32()
         self._network_obj = getattr(Network, self._network)()
         self._client = AsyncClient(network=self._network_obj)
         self._composer = ProtoMsgComposer(network=self._network_obj.string())
@@ -499,8 +500,6 @@ class InjectiveAPIDataSource(GatewayCLOBAPIDataSourceBase):
     async def _update_account_address_and_create_order_hash_manager(self):
         if not self._order_placement_lock.locked():
             raise RuntimeError("The order-placement lock must be acquired before creating the order hash manager.")
-        sub_account_balances = await self._client.get_subaccount_balances_list(subaccount_id=self._sub_account_id)
-        self._account_address = sub_account_balances.balances[0].account_address
         await self._client.get_account(self._account_address)
         await self._client.sync_timeout_height()
         self._order_hash_manager = OrderHashManager(
