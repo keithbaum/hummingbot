@@ -11,19 +11,21 @@ from pyinjective.async_client import AsyncClient
 from pyinjective.orderhash import OrderHashResponse
 from pyinjective.proto.exchange.injective_accounts_rpc_pb2 import StreamSubaccountBalanceResponse
 from pyinjective.proto.exchange.injective_derivative_exchange_rpc_pb2 import (
-    DerivativeLimitOrderbook,
+    DerivativeLimitOrderbookV2,
     DerivativeMarketInfo,
     DerivativeOrderHistory,
     DerivativePosition,
     DerivativeTrade,
+    FundingPayment,
+    FundingPaymentsResponse,
     FundingRate,
     FundingRatesResponse,
     MarketsResponse,
-    OrderbookResponse,
+    OrderbooksV2Response,
     OrdersHistoryResponse,
     PositionsResponse,
+    StreamOrderbookV2Response,
     StreamOrdersHistoryResponse,
-    StreamOrdersResponse,
     StreamPositionsResponse,
     StreamTradesResponse,
     TokenMeta,
@@ -184,11 +186,13 @@ class InjectivePerpetualAPIDataSource(CLOBPerpAPIDataSourceBase):
     async def get_order_book_snapshot(self, trading_pair: str) -> OrderBookMessage:
         market_info = self._markets_info[trading_pair]
         price_scaler: Decimal = Decimal(f"1e-{market_info.quote_token_meta.decimals}")
-        response: OrderbookResponse = await self._client.get_derivative_orderbook(market_id=market_info.market_id)
+        response: OrderbooksV2Response = await self._client.get_derivative_orderbooksV2(
+            market_ids=[market_info.market_id]
+        )
 
-        snapshot_ob: DerivativeLimitOrderbook = response.orderbook
+        snapshot_ob: DerivativeLimitOrderbookV2 = response.orderbooks[0].orderbook
         snapshot_timestamp_ms: float = max(
-            [entry.timestamp for entry in list(response.orderbook.buys) + list(response.orderbook.sells)] + [0]
+            [entry.timestamp for entry in list(snapshot_ob.buys) + list(snapshot_ob.sells)] + [0]
         )
         snapshot_content: Dict[str, Any] = {
             "trading_pair": combine_to_hb_trading_pair(base=market_info.oracle_base, quote=market_info.oracle_quote),
@@ -515,22 +519,19 @@ class InjectivePerpetualAPIDataSource(CLOBPerpAPIDataSourceBase):
         if trading_pair not in self._markets_info:
             return timestamp, funding_rate, payment
 
-        response: Dict[str, Any] = await self._get_gateway_instance().clob_perp_funding_payments(
-            chain=self._chain,
-            network=self._network,
-            connector=self._connector_name,
-            trading_pair=trading_pair,
-            address=self._account_id,
+        response: FundingPaymentsResponse = await self._client.get_funding_payments(
+            subaccount_id=self._account_id, market_id=self._markets_info[trading_pair].market_id, limit=1
         )
 
-        if len(response["fundingPayments"]) != 0:
-            latest_funding_payment: Dict[str, Any] = response["fundingPayments"][0]  # List of payments sorted by latest
+        if len(response.payments) != 0:
+            latest_funding_payment: FundingPayment = response.payments[0]  # List of payments sorted by latest
 
-            timestamp: float = latest_funding_payment["timestamp"] * 1e-3
+            timestamp: float = latest_funding_payment.timestamp * 1e-3
 
             # FundingPayment does not include price, hence we have to fetch latest funding rate
             funding_rate: Decimal = await self._request_last_funding_rate(trading_pair=trading_pair)
-            payment: Decimal = Decimal(latest_funding_payment["amount"])
+            amount_scaler: Decimal = Decimal(f"1e-{self._markets_info[trading_pair].quote_token_meta.decimals}")
+            payment: Decimal = Decimal(latest_funding_payment.amount) * amount_scaler
 
         return timestamp, funding_rate, payment
 
@@ -545,11 +546,13 @@ class InjectivePerpetualAPIDataSource(CLOBPerpAPIDataSourceBase):
         await self._client.get_account(address=self._account_address)
         await self._client.sync_timeout_height()
         tasks_to_await_submitted_orders_to_be_processed_by_chain = [
-            order.wait_until_processed_by_exchange()
+            asyncio.wait_for(order.wait_until_processed_by_exchange(), timeout=CONSTANTS.ORDER_CHAIN_PROCESSING_TIMEOUT)
             for order in self._gateway_order_tracker.active_orders.values()
             if order.creation_transaction_hash is not None
         ]  # orders that have been sent to the chain but not yet added to a block will affect the order nonce
-        await safe_gather(*tasks_to_await_submitted_orders_to_be_processed_by_chain)  # await their processing
+        await safe_gather(
+            *tasks_to_await_submitted_orders_to_be_processed_by_chain, return_exceptions=True  # await their processing
+        )
         self._order_hash_manager = OrderHashManager(network=self._network_obj, sub_account_id=self._account_id)
         await self._order_hash_manager.start()
 
@@ -744,7 +747,7 @@ class InjectivePerpetualAPIDataSource(CLOBPerpAPIDataSourceBase):
         last_trade_price: Decimal = Decimal(last_trade.position_delta.execution_price) * price_scaler
         return last_trade_price
 
-    def _parse_derivative_ob_message(self, message: StreamOrdersResponse) -> OrderBookMessage:
+    def _parse_derivative_ob_message(self, message: StreamOrderbookV2Response) -> OrderBookMessage:
         """
         Order Update Example:
         orderbook {
@@ -783,14 +786,14 @@ class InjectivePerpetualAPIDataSource(CLOBPerpAPIDataSourceBase):
         )
         return snapshot_msg
 
-    def _process_order_book_stream_event(self, message: StreamOrdersResponse):
+    def _process_order_book_stream_event(self, message: StreamOrderbookV2Response):
         snapshot_msg: OrderBookMessage = self._parse_derivative_ob_message(message=message)
         self._publisher.trigger_event(event_tag=OrderBookDataSourceEvent.SNAPSHOT_EVENT, message=snapshot_msg)
 
     async def _listen_to_order_books_stream(self):
         while True:
             market_ids = self._get_market_ids()
-            stream: UnaryStreamCall = await self._client.stream_derivative_orderbooks(market_ids=market_ids)
+            stream: UnaryStreamCall = await self._client.stream_derivative_orderbook_snapshot(market_ids=market_ids)
             try:
                 async for ob_msg in stream:
                     self._process_order_book_stream_event(message=ob_msg)
