@@ -16,7 +16,9 @@ import { VVSConfig } from './vvs/vvs.config';
 import { RefConfig } from './ref/ref.config';
 import { PancakeSwapConfig } from './pancakeswap/pancakeswap.config';
 import { InjectiveCLOBConfig } from './injective/injective.clob.config';
+import { XsswapConfig } from './xsswap/xsswap.config';
 import { ConnectorsResponse } from './connectors.request';
+import { DexalotCLOBConfig } from './dexalot/dexalot.clob.config';
 
 export namespace ConnectorsRoutes {
   export const router = Router();
@@ -106,6 +108,29 @@ export namespace ConnectorsRoutes {
             additional_add_wallet_prompts: {
               accountId:
                 'Enter your injective sub account id wallet key (input 0 if unsure) >>> ',
+            },
+          },
+          {
+            name: 'injective_perpetual',
+            trading_type: InjectiveCLOBConfig.config.tradingTypes('perp'),
+            available_networks: InjectiveCLOBConfig.config.availableNetworks,
+            additional_add_wallet_prompts: {
+              accountId:
+                'Enter your injective sub account id wallet key (input 0 if unsure) >>> ',
+            },
+          },
+          {
+            name: 'xsswap',
+            trading_type: XsswapConfig.config.tradingTypes,
+            available_networks: XsswapConfig.config.availableNetworks,
+          },
+          {
+            name: 'dexalot',
+            trading_type: DexalotCLOBConfig.config.tradingTypes('spot'),
+            available_networks: DexalotCLOBConfig.config.availableNetworks,
+            additional_add_wallet_prompts: {
+              api_key:
+                'Enter your Dexalot API Key (you can request one from the Dexalot team) >>> ',
             },
           },
         ],

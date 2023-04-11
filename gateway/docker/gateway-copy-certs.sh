@@ -68,7 +68,7 @@ copy_certs () {
   fi
 
   echo "Starting container: $INSTANCE_NAME"
-  docker start -d $INSTANCE_NAME && docker attach $INSTANCE_NAME
+  docker start $INSTANCE_NAME && docker attach $INSTANCE_NAME
   echo
 }
 

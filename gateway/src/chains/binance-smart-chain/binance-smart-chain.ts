@@ -8,6 +8,7 @@ import { Ethereumish } from '../../services/common-interfaces';
 import { PancakeSwapConfig } from '../../connectors/pancakeswap/pancakeswap.config';
 import { SushiswapConfig } from '../../connectors/sushiswap/sushiswap.config';
 import { ConfigManagerV2 } from '../../services/config-manager-v2';
+import { OpenoceanConfig } from '../../connectors/openocean/openocean.config';
 
 export class BinanceSmartChain extends EthereumBase implements Ethereumish {
   private static _instances: { [name: string]: BinanceSmartChain };
@@ -97,9 +98,11 @@ export class BinanceSmartChain extends EthereumBase implements Ethereumish {
       spender = PancakeSwapConfig.config.routerAddress(this._chain);
     } else if (reqSpender === 'sushiswap') {
       spender = SushiswapConfig.config.sushiswapRouterAddress(
-        this.chainName,
+        'binance-smart-chain',
         this._chain
       );
+    } else if (reqSpender === 'openocean') {
+      spender = OpenoceanConfig.config.routerAddress('binance-smart-chain', this._chain);
     } else {
       spender = reqSpender;
     }
