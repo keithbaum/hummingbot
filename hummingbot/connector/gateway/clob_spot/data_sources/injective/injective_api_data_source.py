@@ -33,11 +33,13 @@ from hummingbot.connector.gateway.clob_spot.data_sources.injective.injective_con
     BACKEND_TO_CLIENT_ORDER_STATE_MAP,
     CLIENT_TO_BACKEND_ORDER_TYPES_MAP,
     CONNECTOR_NAME,
+    DEFAULT_SUB_ACCOUNT_SUFFIX,
     LOST_ORDER_COUNT_LIMIT,
     MARKETS_UPDATE_INTERVAL,
     MSG_BATCH_UPDATE_ORDERS,
     MSG_CANCEL_SPOT_ORDER,
     MSG_CREATE_SPOT_LIMIT_ORDER,
+    ORDER_CHAIN_PROCESSING_TIMEOUT,
     REQUESTS_SKIP_STEP,
 )
 from hummingbot.connector.gateway.clob_spot.data_sources.injective.injective_utils import OrderHashManager
@@ -133,7 +135,7 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
 
     @property
     def _is_default_subaccount(self):
-        return self._sub_account_id[-24:] == "000000000000000000000000"
+        return self._sub_account_id[-24:] == DEFAULT_SUB_ACCOUNT_SUFFIX
 
     async def start(self):
         """Starts the event streaming."""
@@ -534,11 +536,11 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
         await self._client.get_account(self._account_address)
         await self._client.sync_timeout_height()
         tasks_to_await_submitted_orders_to_be_processed_by_chain = [
-            order.wait_until_processed_by_exchange()
+            asyncio.wait_for(order.wait_until_processed_by_exchange(), timeout=ORDER_CHAIN_PROCESSING_TIMEOUT)
             for order in self._gateway_order_tracker.active_orders.values()
             if order.creation_transaction_hash is not None
         ]  # orders that have been sent to the chain but not yet added to a block will affect the order nonce
-        await safe_gather(*tasks_to_await_submitted_orders_to_be_processed_by_chain)  # await their processing
+        await safe_gather(*tasks_to_await_submitted_orders_to_be_processed_by_chain, return_exceptions=True)  # await their processing
         self._order_hash_manager = OrderHashManager(network=self._network_obj, sub_account_id=self._sub_account_id)
         await self._order_hash_manager.start()
 
