@@ -224,7 +224,7 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
             order_hash=order_hash,
             market_id=market.market_id,
             direction=direction,
-            creation_timestamp=in_flight_order.creation_timestamp * 1e3,
+            creation_timestamp=in_flight_order.creation_timestamp,
             order_type=in_flight_order.order_type,
             trade_type=in_flight_order.trade_type,
             order_mist_updates=misc_updates,
@@ -634,7 +634,7 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
             trade_type=trade_type,
             order_hash=order_hash,
             direction=direction,
-            start_time=int(creation_timestamp),
+            start_time=int(creation_timestamp * 1e3),
         )
 
         if order_status is not None:
@@ -710,72 +710,28 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
 
     async def _listen_to_trades_stream(self):
         while True:
-            market_ids = self._get_market_ids()
+            market_ids: List[str] = self._get_market_ids()
             stream: UnaryStreamCall = await self._client.stream_spot_trades(market_ids=market_ids)
             try:
-                async for trade in stream:
-                    self._parse_trade_event(trade=trade)
+                async for trade_msg in stream:
+                    self._process_trade_stream_event(message=trade_msg)
             except asyncio.CancelledError:
                 raise
             except Exception:
-                self.logger().exception("Unexpected error in user stream listener loop.")
-            self.logger().info("Restarting trades stream.")
+                self.logger().exception("Unexpected error in public trade listener loop.")
+            self.logger().info("Restarting public trades stream.")
             stream.cancel()
 
-    def _parse_trade_event(self, trade: StreamTradesResponse):
-        """Injective fires two trade updates per transaction.
-
-        Trade update example:
-
-        trade {
-          order_hash: "0x289fa654ac64a591e0cee447af3f03b279c8e8cc4d77e2f1c24386eefa8988c9"  # noqa: mock
-          subaccount_id: "0x32b16783ea9a08602dc792f24c3d78bba6e333d3000000000000000000000000"  # noqa: mock
-          market_id: "0xd1956e20d74eeb1febe31cd37060781ff1cb266f49e0512b446a5fafa9a16034"  # noqa: mock
-          trade_execution_type: "limitMatchNewOrder"
-          trade_direction: "buy"
-          price {
-            price: "0.000000001160413"
-            quantity: "1000000000000000"
-            timestamp: 1669192684763
-          }
-          fee: "278.49912"
-          executed_at: 1669192684763
-          fee_recipient: "inj1x2ck0ql2ngyxqtw8jteyc0tchwnwxv7npaungt"
-          trade_id: "19906622_289fa654ac64a591e0cee447af3f03b279c8e8cc4d77e2f1c24386eefa8988c9"  # noqa: mock
-          execution_side: "taker"
-        }
-        operation_type: "insert"
-        timestamp: 1669192686000
-        """
-        market_id = trade.trade.market_id
-        trading_pair = self._get_trading_pair_from_market_id(market_id=market_id)
-        market = self._market_id_to_active_spot_markets[market_id]
-        price = self._convert_price_from_backend(price=trade.trade.price.price, market=market)
-        size = self._convert_size_from_backend(size=trade.trade.price.quantity, market=market)
-        is_taker = trade.trade.execution_side == "taker"
-
-        trade_msg_content = {
-            "trade_id": trade.trade.trade_id,
-            "trading_pair": trading_pair,
-            "trade_type": TradeType.BUY if trade.trade.trade_direction == "buy" else TradeType.SELL,
-            "amount": size,
-            "price": price,
-            "is_taker": is_taker,
-        }
-        trade_msg = OrderBookMessage(
-            message_type=OrderBookMessageType.TRADE,
-            timestamp=trade.trade.executed_at * 1e-3,
-            content=trade_msg_content,
-        )
-        self._publisher.trigger_event(event_tag=OrderBookDataSourceEvent.TRADE_EVENT, message=trade_msg)
-
-        exchange_order_id = trade.trade.order_hash
+    def _process_trade_stream_event(self, message: StreamTradesResponse):
+        trade_message: SpotTrade = message.trade
+        exchange_order_id = trade_message.order_hash
         tracked_order = self._gateway_order_tracker.all_fillable_orders_by_exchange_order_id.get(exchange_order_id)
         client_order_id = "" if tracked_order is None else tracked_order.client_order_id
-
-        trade_update = self._parse_backend_trade(
-            client_order_id=client_order_id, backend_trade=trade.trade
+        trade_ob_msg, trade_update = self._parse_backend_trade(
+            client_order_id=client_order_id, backend_trade=trade_message
         )
+
+        self._publisher.trigger_event(event_tag=OrderBookDataSourceEvent.TRADE_EVENT, message=trade_ob_msg)
         self._publisher.trigger_event(event_tag=MarketEvent.TradeUpdate, message=trade_update)
 
     async def _listen_to_orders_stream(self, market_id: str):
@@ -792,27 +748,6 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
             stream.cancel()
 
     def _parse_order_stream_update(self, order: StreamOrdersResponse):
-        """
-        Order update example:
-
-        order {
-          order_hash: "0x6df823e0adc0d4811e8d25d7380c1b45e43b16b0eea6f109cc1fb31d31aeddc7"  # noqa: documentation
-          market_id: "0xd1956e20d74eeb1febe31cd37060781ff1cb266f49e0512b446a5fafa9a16034"  # noqa: documentation
-          subaccount_id: "0x32b16783ea9a08602dc792f24c3d78bba6e333d3000000000000000000000000"  # noqa: documentation
-          execution_type: "limit"
-          order_type: "buy_po"
-          price: "0.00000000116023"
-          trigger_price: "0"
-          quantity: "2000000000000000"
-          filled_quantity: "0"
-          state: "canceled"
-          created_at: 1669198777253
-          updated_at: 1669198783253
-          direction: "buy"
-        }
-        operation_type: "update"
-        timestamp: 1669198784000
-        """
         order_hash = order.order.order_hash
         in_flight_order = self._gateway_order_tracker.all_fillable_orders_by_exchange_order_id.get(order_hash)
         if in_flight_order is not None:
@@ -851,25 +786,6 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
             stream.cancel()
 
     def _parse_order_book_event(self, order_book_update: StreamOrderbookResponse):
-        """
-        Orderbook update example:
-
-        orderbook {
-          buys {
-            price: "0.000000001161518"
-            quantity: "1000000000000000"
-            timestamp: 1662113015864
-          }
-          sells {
-            price: "0.00000000116303"
-            quantity: "1366000000000000000"
-            timestamp: 1669192832799
-          }
-        }
-        operation_type: "update"
-        timestamp: 1669192836000
-        market_id: "0xd1956e20d74eeb1febe31cd37060781ff1cb266f49e0512b446a5fafa9a16034"  # noqa: documentation
-        """
         udpate_timestamp_ms = order_book_update.timestamp
         market_id = order_book_update.market_id
         trading_pair = self._get_trading_pair_from_market_id(market_id=market_id)
@@ -937,7 +853,7 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
     async def _listen_to_subaccount_balances_stream(self):
         while True:
             # Uses InjectiveAccountsRPC since it provides both total_balance and available_balance in a single stream.
-            stream: UnaryStreamCall = await self._client.stream_subaccount_balance(subaccount_id=self._account_id)
+            stream: UnaryStreamCall = await self._client.stream_subaccount_balance(subaccount_id=self._sub_account_id)
             try:
                 async for balance_msg in stream:
                     self._process_subaccount_balance_stream_event(message=balance_msg)
@@ -1027,12 +943,19 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
 
         return all_trades
 
-    def _parse_backend_trade(self, client_order_id: str, backend_trade: SpotTrade) -> TradeUpdate:
+    def _parse_backend_trade(
+            self, client_order_id: str, backend_trade: SpotTrade
+    ) -> Tuple[OrderBookMessage, TradeUpdate]:
+        exchange_order_id: str = backend_trade.order_hash
         market = self._market_id_to_active_spot_markets[backend_trade.market_id]
         trading_pair = self._get_trading_pair_from_market_id(market_id=backend_trade.market_id)
+        trade_id: str = backend_trade.trade_id
+
         price = self._convert_price_from_backend(price=backend_trade.price.price, market=market)
         size = self._convert_size_from_backend(size=backend_trade.price.quantity, market=market)
         trade_type = TradeType.BUY if backend_trade.trade_direction == "buy" else TradeType.SELL
+        is_taker: bool = backend_trade.execution_side == "taker"
+
         fee_amount = self._convert_quote_from_backend(quote_amount=backend_trade.fee, market=market)
         _, quote = split_hb_trading_pair(trading_pair=trading_pair)
         fee = TradeFeeBase.new_spot_fee(
@@ -1040,10 +963,25 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
             trade_type=trade_type,
             flat_fees=[TokenAmount(amount=fee_amount, token=quote)]
         )
+
+        trade_msg_content = {
+            "trade_id": trade_id,
+            "trading_pair": trading_pair,
+            "trade_type": trade_type,
+            "amount": size,
+            "price": price,
+            "is_taker": is_taker,
+        }
+        trade_ob_msg = OrderBookMessage(
+            message_type=OrderBookMessageType.TRADE,
+            timestamp=backend_trade.executed_at * 1e-3,
+            content=trade_msg_content,
+        )
+
         trade_update = TradeUpdate(
-            trade_id=backend_trade.trade_id,
+            trade_id=trade_id,
             client_order_id=client_order_id,
-            exchange_order_id=backend_trade.order_hash,
+            exchange_order_id=exchange_order_id,
             trading_pair=trading_pair,
             fill_timestamp=backend_trade.executed_at * 1e-3,
             fill_price=price,
@@ -1051,7 +989,7 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
             fill_quote_amount=price * size,
             fee=fee,
         )
-        return trade_update
+        return trade_ob_msg, trade_update
 
     async def _listen_to_transactions_stream(self):
         while True:
