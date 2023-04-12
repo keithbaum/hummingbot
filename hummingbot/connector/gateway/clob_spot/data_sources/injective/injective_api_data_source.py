@@ -896,7 +896,7 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
         search_completed = False
 
         while not search_completed:
-            orders = await self._client.get_historical_spot_orders(
+            response = await self._client.get_historical_spot_orders(
                 market_id=market_id,
                 subaccount_id=self._sub_account_id,
                 direction=direction,
@@ -904,11 +904,11 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
                 skip=skip,
                 order_types=[CLIENT_TO_BACKEND_ORDER_TYPES_MAP[(trade_type, order_type)]]
             )
-            if len(orders.orders) == 0:
+            if len(response.orders) == 0:
                 search_completed = True
             else:
                 skip += REQUESTS_SKIP_STEP
-                for response_order in orders.orders:
+                for response_order in response.orders:
                     if response_order.order_hash == order_hash:
                         order_status = response_order
                         search_completed = True
