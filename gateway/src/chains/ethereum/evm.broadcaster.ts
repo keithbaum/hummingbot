@@ -105,20 +105,15 @@ export class EVMTxBroadcaster {
       );
     } catch (e) {
       if (e instanceof Error) {
-        if (e.message.includes('current nonce (')) {
-          const expectedSequence = Number(
-            e.message.split('current nonce (')[1].split(')')[0]
-          );
-          logger.info(`Expected nonce: ${expectedSequence}`);
-          await this._chain.nonceManager.overridePendingNonce(
-            this._wallet_address,
-            expectedSequence
-          );
-          txResponse = await this.createAndSend(transaction, expectedSequence);
-        } else {
-          logger.error(e.message);
-          throw e;
-        }
+        const expectedSequence = Number(
+          e.message.split('current nonce (')[1].split(')')[0]
+        );
+        logger.info(`Expected nonce: ${expectedSequence}`);
+        await this._chain.nonceManager.overridePendingNonce(
+          this._wallet_address,
+          expectedSequence
+        );
+        txResponse = await this.createAndSend(transaction, expectedSequence);
       }
     } finally {
       this._txQueue.shift();
