@@ -230,10 +230,21 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
             order_mist_updates=misc_updates,
         )
         if status_update is None and in_flight_order.creation_transaction_hash is not None:
-            creation_transaction = await self._get_transaction_by_hash(
-                transaction_hash=in_flight_order.creation_transaction_hash
-            )
-            if await self._check_if_order_failed_based_on_transaction(
+            try:
+                creation_transaction = await self._get_transaction_by_hash(
+                    transaction_hash=in_flight_order.creation_transaction_hash
+                )
+            except Exception:
+                self.logger().debug(
+                    f"Failed to fetch transaction {in_flight_order.creation_transaction_hash} for order"
+                    f" {in_flight_order.exchange_order_id}.",
+                    exc_info=True,
+                )
+                tx_response = None
+            if tx_response is None:
+                async with self._order_placement_lock:
+                    await self._update_account_address_and_create_order_hash_manager()
+            elif await self._check_if_order_failed_based_on_transaction(
                 transaction=creation_transaction, order=in_flight_order
             ):
                 status_update = OrderUpdate(
@@ -372,7 +383,7 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
         )
         transaction_hash: Optional[str] = cancelation_result.get("txHash")
 
-        if transaction_hash is None:
+        if transaction_hash in (None, ""):
             async with self._order_placement_lock:
                 await self._update_account_address_and_create_order_hash_manager()
             raise ValueError(
@@ -1005,7 +1016,7 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
             stream.cancel()
 
     async def _parse_transaction_event(self, transaction: StreamTxsResponse):
-        order = self._gateway_order_tracker.get_fillable_order_by_hash(hash=transaction.hash)
+        order = self._gateway_order_tracker.get_fillable_order_by_hash(transaction_hash=transaction.hash)
         if order is not None:
             messages = json.loads(s=transaction.messages)
             for message in messages:
