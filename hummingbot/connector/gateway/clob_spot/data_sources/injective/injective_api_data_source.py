@@ -179,27 +179,25 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
         size_scale = self._get_backend_denom_scaler(denom_meta=market.base_token_meta)
         last_update_timestamp_ms = 0
         bids = []
-        if len(order_book_response.orderbooks) == 1:
-            # There's no ambiguity in the orderbooks single market_id response
-            orderbook = order_book_response.orderbooks[0].orderbook
-            for bid in orderbook.buys:
-                bids.append((Decimal(bid.price) * price_scale, Decimal(bid.quantity) * size_scale))
-                last_update_timestamp_ms = max(last_update_timestamp_ms, bid.timestamp)
-            asks = []
-            for ask in orderbook.sells:
-                asks.append((Decimal(ask.price) * price_scale, Decimal(ask.quantity) * size_scale))
-                last_update_timestamp_ms = max(last_update_timestamp_ms, ask.timestamp)
-            snapshot_msg = OrderBookMessage(
-                message_type=OrderBookMessageType.SNAPSHOT,
-                content={
-                    "trading_pair": trading_pair,
-                    "update_id": last_update_timestamp_ms,
-                    "bids": bids,
-                    "asks": asks,
-                },
-                timestamp=last_update_timestamp_ms * 1e-3,
-            )
-            return snapshot_msg
+        orderbook = order_book_response.orderbooks[0].orderbook
+        for bid in orderbook.buys:
+            bids.append((Decimal(bid.price) * price_scale, Decimal(bid.quantity) * size_scale))
+            last_update_timestamp_ms = max(last_update_timestamp_ms, bid.timestamp)
+        asks = []
+        for ask in orderbook.sells:
+            asks.append((Decimal(ask.price) * price_scale, Decimal(ask.quantity) * size_scale))
+            last_update_timestamp_ms = max(last_update_timestamp_ms, ask.timestamp)
+        snapshot_msg = OrderBookMessage(
+            message_type=OrderBookMessageType.SNAPSHOT,
+            content={
+                "trading_pair": trading_pair,
+                "update_id": last_update_timestamp_ms,
+                "bids": bids,
+                "asks": asks,
+            },
+            timestamp=last_update_timestamp_ms * 1e-3,
+        )
+        return snapshot_msg
 
     def is_order_not_found_during_status_update_error(self, status_update_exception: Exception) -> bool:
         return str(status_update_exception).startswith("No update found for order")
@@ -231,7 +229,7 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
         )
         if status_update is None and in_flight_order.creation_transaction_hash is not None:
             try:
-                creation_transaction = await self._get_transaction_by_hash(
+                tx_response = await self._get_transaction_by_hash(
                     transaction_hash=in_flight_order.creation_transaction_hash
                 )
             except Exception:
@@ -245,11 +243,11 @@ class InjectiveAPIDataSource(CLOBAPIDataSourceBase):
                 async with self._order_placement_lock:
                     await self._update_account_address_and_create_order_hash_manager()
             elif await self._check_if_order_failed_based_on_transaction(
-                transaction=creation_transaction, order=in_flight_order
+                transaction=tx_response, order=in_flight_order
             ):
                 status_update = OrderUpdate(
                     trading_pair=in_flight_order.trading_pair,
-                    update_timestamp=creation_transaction.data.block_unix_timestamp * 1e-3,
+                    update_timestamp=tx_response.data.block_unix_timestamp * 1e-3,
                     new_state=OrderState.FAILED,
                     client_order_id=in_flight_order.client_order_id,
                     exchange_order_id=in_flight_order.exchange_order_id,
